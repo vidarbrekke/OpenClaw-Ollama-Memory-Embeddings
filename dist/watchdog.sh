@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
 # Drift watchdog for OpenClaw memorySearch embeddings config.
 set -euo pipefail
+IFS=$'\n\t'
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_SH="${SKILL_DIR}/lib/common.sh"
+CONFIG_CLI="${SKILL_DIR}/lib/config.js"
+if [ ! -f "${COMMON_SH}" ]; then
+  echo "[ERROR] Missing shared helper: ${COMMON_SH}" >&2
+  exit 1
+fi
+if [ ! -f "${CONFIG_CLI}" ]; then
+  echo "[ERROR] Missing config helper: ${CONFIG_CLI}" >&2
+  exit 1
+fi
+source "${COMMON_SH}"
 ENFORCE_SH="${SKILL_DIR}/enforce.sh"
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}"
 MODEL=""
@@ -65,31 +77,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-log() {
-  [ "$QUIET" -eq 1 ] || echo "$@"
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "ERROR: '$1' not found in PATH."
-    exit 1
-  }
-}
-
 resolve_model_if_missing() {
   if [ -n "$MODEL" ]; then
     return 0
   fi
-  MODEL="$(node -e '
-const fs=require("fs");
-const p=process.argv[1];
-try {
-  const cfg=JSON.parse(fs.readFileSync(p,"utf8"));
-  process.stdout.write(cfg?.agents?.defaults?.memorySearch?.model || "");
-} catch (_) {}
-' "$CONFIG_PATH")"
+  MODEL="$(node "${CONFIG_CLI}" resolve-model "$CONFIG_PATH")"
   if [ -z "$MODEL" ]; then
-    echo "ERROR: --model is required (or set memorySearch.model first)."
+    log_err "--model is required (or set memorySearch.model first)."
     exit 1
   fi
 }
@@ -106,26 +100,26 @@ run_cycle() {
   set -e
 
   if [ "$status" -eq 0 ]; then
-    log "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] OK: no drift"
+    log_info "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] OK: no drift"
     return 0
   fi
   if [ "$status" -ne 10 ]; then
-    log "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: drift check failed (status $status)"
+    log_err "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] drift check failed (status $status)"
     return 1
   fi
 
-  log "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] DRIFT: healing..."
+  log_warn "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] DRIFT: healing..."
   if [ "$RESTART_ON_HEAL" -eq 1 ]; then
     "$ENFORCE_SH" --model "$MODEL" --base-url "$BASE_URL" --openclaw-config "$CONFIG_PATH" --restart-on-change --quiet
   else
     "$ENFORCE_SH" --model "$MODEL" --base-url "$BASE_URL" --openclaw-config "$CONFIG_PATH" --quiet
   fi
-  log "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] HEALED"
+  log_info "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] HEALED"
 }
 
 install_launchd() {
   if [ "$(uname)" != "Darwin" ]; then
-    echo "ERROR: --install-launchd is macOS only."
+    log_err "--install-launchd is macOS only."
     echo "Linux recommendation:"
     echo "  Use cron or a systemd timer to run:"
     echo "  /bin/bash ${SKILL_DIR}/watchdog.sh --once --model <model>"
@@ -133,11 +127,16 @@ install_launchd() {
     exit 1
   fi
   require_cmd launchctl
+  require_cmd plutil
   require_cmd node
   resolve_model_if_missing
   mkdir -p "$(dirname "$PLIST_PATH")" "$LOG_DIR"
   local shell_bin
   shell_bin="$(command -v bash)"
+  local restart_flag_xml=""
+  if [ "$RESTART_ON_HEAL" -eq 1 ]; then
+    restart_flag_xml="    <string>--restart-on-heal</string>"
+  fi
   cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -156,7 +155,7 @@ install_launchd() {
     <string>${BASE_URL}</string>
     <string>--openclaw-config</string>
     <string>${CONFIG_PATH}</string>
-$( [ "$RESTART_ON_HEAL" -eq 1 ] && echo "    <string>--restart-on-heal</string>" )
+${restart_flag_xml}
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -170,26 +169,32 @@ $( [ "$RESTART_ON_HEAL" -eq 1 ] && echo "    <string>--restart-on-heal</string>"
 </plist>
 EOF
 
+  if ! plutil -lint "$PLIST_PATH" >/dev/null 2>&1; then
+    log_err "Generated launchd plist is invalid: ${PLIST_PATH}"
+    rm -f "$PLIST_PATH"
+    exit 1
+  fi
+
   launchctl bootout "gui/$(id -u)/${PLIST_NAME}" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
   launchctl kickstart -k "gui/$(id -u)/${PLIST_NAME}"
-  log "Installed launchd watchdog: ${PLIST_PATH}"
+  log_info "Installed launchd watchdog: ${PLIST_PATH}"
 }
 
 uninstall_launchd() {
   if [ "$(uname)" != "Darwin" ]; then
-    echo "ERROR: --uninstall-launchd is macOS only."
+    log_err "--uninstall-launchd is macOS only."
     echo "Windows: not supported (bash script)."
     exit 1
   fi
   require_cmd launchctl
   launchctl bootout "gui/$(id -u)/${PLIST_NAME}" >/dev/null 2>&1 || true
   rm -f "$PLIST_PATH"
-  log "Removed launchd watchdog: ${PLIST_PATH}"
+  log_info "Removed launchd watchdog: ${PLIST_PATH}"
 }
 
 if [ "$INSTALL_LAUNCHD" -eq 1 ] && [ "$UNINSTALL_LAUNCHD" -eq 1 ]; then
-  echo "ERROR: choose only one of --install-launchd or --uninstall-launchd."
+  log_err "choose only one of --install-launchd or --uninstall-launchd."
   exit 1
 fi
 

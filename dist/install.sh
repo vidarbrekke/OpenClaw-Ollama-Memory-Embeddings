@@ -2,8 +2,20 @@
 # Install and configure OpenClaw memory embeddings via Ollama.
 # Can run from repo path or from ~/.openclaw/skills/ollama-memory-embeddings.
 set -euo pipefail
+IFS=$'\n\t'
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_SH="${SKILL_DIR}/lib/common.sh"
+CONFIG_CLI="${SKILL_DIR}/lib/config.js"
+if [ ! -f "${COMMON_SH}" ]; then
+  echo "[ERROR] Missing shared helper: ${COMMON_SH}" >&2
+  exit 1
+fi
+if [ ! -f "${CONFIG_CLI}" ]; then
+  echo "[ERROR] Missing config helper: ${CONFIG_CLI}" >&2
+  exit 1
+fi
+source "${COMMON_SH}"
 OPENCLAW_DIR="${HOME}/.openclaw"
 SKILLS_DIR="${OPENCLAW_DIR}/skills/ollama-memory-embeddings"
 
@@ -16,6 +28,7 @@ INSTALL_WATCHDOG=0
 WATCHDOG_INTERVAL=60
 REINDEX_MEMORY="auto" # auto|yes|no
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${OPENCLAW_DIR}/openclaw.json}"
+TMP_ENFORCE_LOG=""
 
 usage() {
   cat <<'EOF'
@@ -61,12 +74,12 @@ done
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "ERROR: '$1' not found in PATH."
-    exit 1
-  }
+cleanup() {
+  if [ -n "${TMP_ENFORCE_LOG:-}" ] && [ -f "${TMP_ENFORCE_LOG:-}" ]; then
+    rm -f "${TMP_ENFORCE_LOG}"
+  fi
 }
+trap cleanup EXIT INT TERM
 
 validate_model() {
   case "$1" in
@@ -87,17 +100,6 @@ validate_reindex_mode() {
     auto|yes|no) return 0 ;;
     *) echo "ERROR: invalid reindex mode '$1' (expected auto|yes|no)"; exit 1 ;;
   esac
-}
-
-# Normalize model name: add :latest if no tag present.
-# Ollama list prints "model:tag"; the embeddings API also expects the tagged form.
-normalize_model() {
-  local m="$1"
-  if [[ "$m" != *:* ]]; then
-    echo "${m}:latest"
-  else
-    echo "$m"
-  fi
 }
 
 ollama_running() {
@@ -179,8 +181,10 @@ prompt_model_if_needed() {
 model_exists_in_ollama() {
   local model_tagged
   model_tagged="$(normalize_model "$1")"
-  # Also check untagged form: ollama list may show either
-  ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qE "^(${1}|${model_tagged})$" 2>/dev/null
+  # Also check untagged form: ollama list may show either.
+  # Fixed-string matching avoids regex pitfalls from model names.
+  ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qFx "${1}" 2>/dev/null || \
+    ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qFx "${model_tagged}" 2>/dev/null
 }
 
 import_gguf_to_ollama() {
@@ -188,12 +192,20 @@ import_gguf_to_ollama() {
   local name="$2"
   local tmp
   tmp="$(mktemp)"
+  local old_trap
+  old_trap="$(trap -p EXIT || true)"
+  trap 'rm -f "$tmp"' EXIT INT TERM
   echo "FROM \"$gguf\"" > "$tmp"
   set +e
   ollama create "$name" -f "$tmp"
   local status=$?
   set -e
   rm -f "$tmp"
+  if [ -n "$old_trap" ]; then
+    eval "$old_trap"
+  else
+    trap - EXIT INT TERM
+  fi
   return "$status"
 }
 
@@ -246,8 +258,8 @@ validate_import_mode "$IMPORT_LOCAL_GGUF"
 validate_reindex_mode "$REINDEX_MEMORY"
 
 if ! ollama_running; then
-  echo "ERROR: Ollama is not reachable at http://127.0.0.1:11434"
-  echo "Start Ollama first, then re-run installer."
+  log_err "Ollama is not reachable at http://127.0.0.1:11434"
+  log_info "Start Ollama first, then re-run installer."
   exit 1
 fi
 
@@ -292,7 +304,7 @@ if [ -n "$LOCAL_GGUF" ] && [ "$LOCAL_GGUF_MATCHES_MODEL" -eq 1 ]; then
       ;;
   esac
 elif [ -n "$LOCAL_GGUF" ] && [ "$IMPORT_LOCAL_GGUF" = "yes" ]; then
-  echo "WARNING: --import-local-gguf yes ignored because detected GGUF does not match selected model '${MODEL}'."
+  log_warn "--import-local-gguf yes ignored because detected GGUF does not match selected model '${MODEL}'."
 fi
 
 if [ "$WILL_IMPORT" = "yes" ]; then
@@ -321,7 +333,7 @@ echo "Using model: ${MODEL_TO_USE_CANON}"
 echo ""
 echo "1. Skill files -> ${SKILLS_DIR}/"
 mkdir -p "$SKILLS_DIR"
-for f in SKILL.md README.md install.sh verify.sh; do
+for f in VERSION SKILL.md README.md install.sh verify.sh; do
   if [ -f "${SKILL_DIR}/${f}" ]; then
     # Avoid copying a file onto itself when running from installed skill path.
     if [ "${SKILL_DIR}/${f}" != "${SKILLS_DIR}/${f}" ]; then
@@ -329,14 +341,23 @@ for f in SKILL.md README.md install.sh verify.sh; do
     fi
   fi
 done
-for f in enforce.sh watchdog.sh; do
+for f in enforce.sh watchdog.sh audit.sh; do
   if [ -f "${SKILL_DIR}/${f}" ]; then
     if [ "${SKILL_DIR}/${f}" != "${SKILLS_DIR}/${f}" ]; then
       cp "${SKILL_DIR}/${f}" "${SKILLS_DIR}/"
     fi
   fi
 done
-chmod +x "${SKILLS_DIR}/install.sh" "${SKILLS_DIR}/verify.sh" "${SKILLS_DIR}/enforce.sh" "${SKILLS_DIR}/watchdog.sh" 2>/dev/null || true
+mkdir -p "${SKILLS_DIR}/lib"
+for f in common.sh config.js; do
+  if [ -f "${SKILL_DIR}/lib/${f}" ]; then
+    if [ "${SKILL_DIR}/lib/${f}" != "${SKILLS_DIR}/lib/${f}" ]; then
+      cp "${SKILL_DIR}/lib/${f}" "${SKILLS_DIR}/lib/"
+    fi
+  fi
+done
+chmod +x "${SKILLS_DIR}/install.sh" "${SKILLS_DIR}/verify.sh" "${SKILLS_DIR}/enforce.sh" "${SKILLS_DIR}/watchdog.sh" "${SKILLS_DIR}/audit.sh" 2>/dev/null || true
+chmod +x "${SKILLS_DIR}/lib/config.js" 2>/dev/null || true
 
 # ── Config backup ────────────────────────────────────────────────────────────
 
@@ -351,53 +372,37 @@ else
 fi
 
 # Capture pre-change embedding fingerprint to decide if reindex is needed.
-PRE_MS="$(node -e '
-const fs=require("fs");
-const p=process.argv[1];
-let cfg={};
-try { cfg=JSON.parse(fs.readFileSync(p,"utf8")); } catch (_) {}
-const ms=cfg?.agents?.defaults?.memorySearch || {};
-const fp={
-  provider: ms.provider || "",
-  model: ms.model || "",
-  baseUrl: ms?.remote?.baseUrl || "",
-  apiKeySet: !!(ms?.remote?.apiKey || ""),
-};
-process.stdout.write(JSON.stringify(fp));
-' "$CONFIG_PATH")"
+PRE_MS="$(node "${CONFIG_CLI}" fingerprint "$CONFIG_PATH")"
 
 # ── Enforce config (single source of truth) ───────────────────────────────────
 
-"${SKILLS_DIR}/enforce.sh" \
+TMP_ENFORCE_LOG="$(mktemp)"
+if ! "${SKILLS_DIR}/enforce.sh" \
   --model "${MODEL_TO_USE_CANON}" \
   --openclaw-config "${CONFIG_PATH}" \
-  --base-url "http://127.0.0.1:11434/v1/" >/dev/null
+  --base-url "http://127.0.0.1:11434/v1/" >"${TMP_ENFORCE_LOG}" 2>&1; then
+  log_err "Config enforcement failed."
+  log_info "Last 50 lines from enforce.sh output:"
+  tail -n 50 "${TMP_ENFORCE_LOG}" || true
+  exit 1
+fi
+rm -f "${TMP_ENFORCE_LOG}"
+TMP_ENFORCE_LOG=""
 
 # ── Post-write sanity check ─────────────────────────────────────────────────
 
 echo "3. Config updated -> ${CONFIG_PATH}"
 echo ""
 echo "   Verifying config write..."
-export CONFIG_PATH
-SANITY="$(node -e '
-const fs = require("fs");
-const p = process.env.CONFIG_PATH;
-try {
-  const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
-  const ms = cfg?.agents?.defaults?.memorySearch || {};
-  console.log("   provider:  " + (ms.provider || "(missing)"));
-  console.log("   model:     " + (ms.model || "(missing)"));
-  console.log("   baseUrl:   " + (ms?.remote?.baseUrl || "(missing)"));
-  console.log("   apiKey:    " + (ms?.remote?.apiKey ? "(set)" : "(missing)"));
-  if (ms.provider !== "openai") { console.log("   WARNING: provider is not openai"); process.exit(1); }
-  if (!ms.model) { console.log("   WARNING: model is empty"); process.exit(1); }
-  if (!ms?.remote?.baseUrl) { console.log("   WARNING: baseUrl is empty"); process.exit(1); }
-} catch (e) {
-  console.error("   ERROR: config is not valid JSON: " + e.message);
-  process.exit(1);
-}
-')"
-echo "$SANITY"
+if ! SANITY="$(node "${CONFIG_CLI}" sanity "$CONFIG_PATH")"; then
+  log_err "config sanity check failed"
+  echo "$SANITY"
+  exit 1
+fi
+echo "   provider:  $(printf "%s\n" "$SANITY" | sed -n "s/^provider://p")"
+echo "   model:     $(printf "%s\n" "$SANITY" | sed -n "s/^model://p")"
+echo "   baseUrl:   $(printf "%s\n" "$SANITY" | sed -n "s/^baseUrl://p")"
+echo "   apiKey:    $(printf "%s\n" "$SANITY" | sed -n "s/^apiKey://p")"
 
 if [ "$INSTALL_WATCHDOG" -eq 1 ]; then
   echo ""
@@ -433,25 +438,12 @@ echo "5. Verifying Ollama embeddings endpoint..."
 if "${SKILLS_DIR}/verify.sh" --model "$MODEL_TO_USE_CANON" --base-url "http://127.0.0.1:11434/v1/"; then
   echo "   Verification passed."
 else
-  echo "   WARNING: Verification failed. Check Ollama model and gateway logs."
+  log_warn "Verification failed. Check Ollama model and gateway logs."
 fi
 
 # ── Optional memory reindex ──────────────────────────────────────────────────
 
-POST_MS="$(node -e '
-const fs=require("fs");
-const p=process.argv[1];
-let cfg={};
-try { cfg=JSON.parse(fs.readFileSync(p,"utf8")); } catch (_) {}
-const ms=cfg?.agents?.defaults?.memorySearch || {};
-const fp={
-  provider: ms.provider || "",
-  model: ms.model || "",
-  baseUrl: ms?.remote?.baseUrl || "",
-  apiKeySet: !!(ms?.remote?.apiKey || ""),
-};
-process.stdout.write(JSON.stringify(fp));
-' "$CONFIG_PATH")"
+POST_MS="$(node "${CONFIG_CLI}" fingerprint "$CONFIG_PATH")"
 
 NEEDS_REINDEX=1
 if [ "$PRE_MS" = "$POST_MS" ]; then

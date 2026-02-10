@@ -2,11 +2,27 @@
 # Verify Ollama embeddings endpoint with selected model.
 # Checks: model exists in Ollama → endpoint reachable → valid embedding response.
 set -euo pipefail
+IFS=$'\n\t'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_SH="${SCRIPT_DIR}/lib/common.sh"
+CONFIG_CLI="${SCRIPT_DIR}/lib/config.js"
+if [ ! -f "${COMMON_SH}" ]; then
+  echo "[ERROR] Missing shared helper: ${COMMON_SH}" >&2
+  exit 1
+fi
+if [ ! -f "${CONFIG_CLI}" ]; then
+  echo "[ERROR] Missing config helper: ${CONFIG_CLI}" >&2
+  exit 1
+fi
+source "${COMMON_SH}"
 
 MODEL=""
 BASE_URL=""
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}"
 VERBOSE=0
+TMP_BODY=""
+TMP_ERR=""
 
 usage() {
   cat <<'EOF'
@@ -35,22 +51,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "ERROR: '$1' not found in PATH."
-    exit 1
-  }
-}
-
-# Normalize model name: add :latest if no tag present.
-normalize_model() {
-  local m="$1"
-  if [[ "$m" != *:* ]]; then
-    echo "${m}:latest"
-  else
-    echo "$m"
+cleanup() {
+  if [ -n "${TMP_BODY:-}" ] && [ -f "${TMP_BODY:-}" ]; then
+    rm -f "${TMP_BODY}"
+  fi
+  if [ -n "${TMP_ERR:-}" ] && [ -f "${TMP_ERR:-}" ]; then
+    rm -f "${TMP_ERR}"
   fi
 }
+trap cleanup EXIT INT TERM
 
 require_cmd node
 require_cmd curl
@@ -58,42 +67,7 @@ require_cmd curl
 # ── Read config if needed ────────────────────────────────────────────────────
 
 if [ -z "$MODEL" ] || [ -z "$BASE_URL" ]; then
-  export CONFIG_PATH
-  MAP_OUTPUT="$(node -e '
-const fs = require("fs");
-const p = process.env.CONFIG_PATH;
-const CANDIDATES = [
-  ["agents","defaults","memorySearch"],
-  ["memorySearch"],
-  ["agents","memorySearch"],
-  ["agents","defaults","memory","search"],
-  ["memory","search"],
-];
-function getAt(obj, path) {
-  let cur = obj;
-  for (const k of path) {
-    if (!cur || typeof cur !== "object" || !(k in cur)) return undefined;
-    cur = cur[k];
-  }
-  return cur;
-}
-function resolveMs(cfg) {
-  const canonical = getAt(cfg, CANDIDATES[0]);
-  if (canonical && typeof canonical === "object" && !Array.isArray(canonical)) return canonical;
-  for (const p of CANDIDATES.slice(1)) {
-    const v = getAt(cfg, p);
-    if (v && typeof v === "object" && !Array.isArray(v)) return v;
-  }
-  return {};
-}
-let cfg = {};
-try { cfg = JSON.parse(fs.readFileSync(p, "utf8")); } catch (_) {}
-const ms = resolveMs(cfg);
-const model = ms.model || "";
-const base = (ms?.remote?.baseUrl || "http://127.0.0.1:11434/v1/").trim();
-console.log(model);
-console.log(base);
-')"
+  MAP_OUTPUT="$(node "${CONFIG_CLI}" resolve-model-base "${CONFIG_PATH}")"
   CFG_MODEL="$(printf "%s\n" "$MAP_OUTPUT" | sed -n '1p')"
   CFG_BASE_URL="$(printf "%s\n" "$MAP_OUTPUT" | sed -n '2p')"
   [ -z "$MODEL" ] && MODEL="$CFG_MODEL"
@@ -125,7 +99,8 @@ echo "  Model: ${MODEL}"
 echo ""
 echo "  [1/2] Checking model availability in Ollama..."
 if command -v ollama >/dev/null 2>&1; then
-  if ! ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qE "^(${MODEL}|${MODEL%%:*})$" 2>/dev/null; then
+  if ! ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qFx "${MODEL}" 2>/dev/null && \
+     ! ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qFx "${MODEL%%:*}" 2>/dev/null; then
     echo "  WARNING: model '${MODEL}' not found in 'ollama list'."
     echo "  The model may not be pulled. Try: ollama pull ${MODEL%%:*}"
     echo ""
@@ -160,9 +135,8 @@ HTTP_CODE="$(curl -sS -o "$TMP_BODY" -w "%{http_code}" \
 CURL_STATUS=$?
 set -e
 
-RESP="$(cat "$TMP_BODY")"
-CURL_ERR="$(cat "$TMP_ERR")"
-rm -f "$TMP_BODY" "$TMP_ERR"
+RESP="$(<"$TMP_BODY")"
+CURL_ERR="$(<"$TMP_ERR")"
 
 if [ "$CURL_STATUS" -ne 0 ]; then
   echo "  ERROR: curl failed to reach ${EMBED_URL}"
@@ -194,10 +168,11 @@ if [ "$HTTP_CODE" != "200" ]; then
   exit 1
 fi
 
-export RESP VERBOSE
-node <<'NODEOF'
-const raw = process.env.RESP || "";
-const verbose = process.env.VERBOSE === "1";
+node - "$TMP_BODY" "$VERBOSE" <<'NODEOF'
+const fs = require("fs");
+const bodyPath = process.argv[2];
+const verbose = process.argv[3] === "1";
+const raw = fs.readFileSync(bodyPath, "utf8");
 let body;
 try { body = JSON.parse(raw); } catch {
   console.error("  ERROR: embeddings endpoint did not return valid JSON.");

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Ensure dist/VERSION was updated when dist/ files change (so 3rd-party OpenClaw repos see a new version).
+set -euo pipefail
+
+# Remote ref and URL are $1 and $2; we need the local ref to find the commit range.
+# For refs/heads/BRANCH, commits being pushed are $(git merge-base $2 $1)..$1
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "$remote_sha" ] && continue
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    range="4b825dc642cb6eb9a060e54bf8d69288fbee4904..$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  dist_changed="$(git diff --name-only "$range" -- dist/ 2>/dev/null | grep -v '^dist/VERSION$' || true)"
+  version_changed="$(git diff --name-only "$range" -- dist/VERSION 2>/dev/null || true)"
+  if [ -n "$dist_changed" ] && [ -z "$version_changed" ]; then
+    echo "Error: You changed files in dist/ but did not update dist/VERSION." >&2
+    echo "Run:  ./scripts/bump-version.sh [patch|minor|major] --commit" >&2
+    echo "Then push again." >&2
+    exit 1
+  fi
+done
+
+exit 0
