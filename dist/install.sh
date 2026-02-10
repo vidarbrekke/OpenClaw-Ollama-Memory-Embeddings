@@ -333,7 +333,7 @@ echo "Using model: ${MODEL_TO_USE_CANON}"
 echo ""
 echo "1. Skill files -> ${SKILLS_DIR}/"
 mkdir -p "$SKILLS_DIR"
-for f in VERSION SKILL.md README.md install.sh verify.sh; do
+for f in VERSION.txt SKILL.md README.md LICENSE.md install.sh verify.sh; do
   if [ -f "${SKILL_DIR}/${f}" ]; then
     # Avoid copying a file onto itself when running from installed skill path.
     if [ "${SKILL_DIR}/${f}" != "${SKILLS_DIR}/${f}" ]; then

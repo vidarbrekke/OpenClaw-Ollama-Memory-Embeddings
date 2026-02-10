@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Bump dist/VERSION (and sync version in dist/SKILL.md frontmatter).
+# Bump dist/VERSION.txt (and sync version in dist/SKILL.md frontmatter).
 # Usage: scripts/bump-version.sh [patch|minor|major] [--commit]
 # Default: patch. With --commit, git add and commit the version files.
 set -euo pipefail
 IFS=$'\n\t'
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION_FILE="${ROOT}/dist/VERSION"
+VERSION_FILE="${ROOT}/dist/VERSION.txt"
 SKILL_FILE="${ROOT}/dist/SKILL.md"
 Bump="${1:-patch}"
 DO_COMMIT=0

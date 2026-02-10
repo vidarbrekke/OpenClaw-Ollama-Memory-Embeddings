@@ -18,7 +18,7 @@ For full user docs, options, and usage after install, see **[dist/README.md](dis
 
 | Path | Purpose |
 |------|--------|
-| **dist/** | Installable skill (scripts, lib, SKILL.md, README, LICENSE). This is what gets copied to `~/.openclaw/skills/ollama-memory-embeddings`. |
+| **dist/** | Installable skill (scripts, lib, SKILL.md, README, LICENSE.md). This is what gets copied to `~/.openclaw/skills/ollama-memory-embeddings`. |
 | **tests/** | Unit and smoke tests; not part of the installed skill. |
 | **.github/** | CI workflows. |
 | **Development_docs/** | Design notes, roadmap, audit contract; not part of the installed skill. |
@@ -29,7 +29,7 @@ For full user docs, options, and usage after install, see **[dist/README.md](dis
 
 3rd-party OpenClaw repositories/online directories can read the skill version from:
 
-- **`dist/VERSION`** — single line, semantic version (e.g. `1.0.0`). Also copied into the installed skill path.
+- **`dist/VERSION.txt`** — single line, semantic version (e.g. `1.0.0`). Also copied into the installed skill path.
 - **`dist/SKILL.md`** — frontmatter `version: "1.0.0"`.
 
 **Before you push:** if you changed anything in `dist/`, bump the version so directories see an update:
@@ -38,6 +38,6 @@ For full user docs, options, and usage after install, see **[dist/README.md](dis
 ./scripts/bump-version.sh [patch|minor|major] --commit
 ```
 
-Then push. The **pre-push hook** (after `git config core.hooksPath .githooks`) blocks the push if `dist/` changed but `dist/VERSION` was not updated.
+Then push. The **pre-push hook** (after `git config core.hooksPath .githooks`) blocks the push if `dist/` changed but `dist/VERSION.txt` was not updated.
 
-License: MIT. See [dist/LICENSE](dist/LICENSE).
+License: MIT. See [dist/LICENSE.md](dist/LICENSE.md).
