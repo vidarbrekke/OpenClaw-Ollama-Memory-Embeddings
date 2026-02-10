@@ -86,13 +86,15 @@ bash ~/.openclaw/skills/ollama-memory-embeddings/install.sh \
 Options:
 
 - `--model <id>`: one of `embeddinggemma`, `nomic-embed-text`, `all-minilm`, `mxbai-embed-large`
-- `--import-local-gguf <auto|yes|no>`: default `auto` (interactive: prompts; non-interactive: `no`)
+- `--import-local-gguf <auto|yes|no>`: default `no` (safer default; opt in with `yes`)
 - `--import-model-name <name>`: default `embeddinggemma-local`
-- `--skip-restart`: do not restart gateway
+- `--restart-gateway <yes|no>`: default `no` (restart only when explicitly requested)
+- `--skip-restart`: deprecated alias for `--restart-gateway no`
 - `--openclaw-config <path>`: config file path override
 - `--install-watchdog`: install launchd drift auto-heal watchdog (macOS)
 - `--watchdog-interval <sec>`: watchdog interval (default 60)
 - `--reindex-memory <auto|yes|no>`: memory rebuild mode (default `auto`)
+- `--dry-run`: print planned changes and commands; make no modifications
 
 ## Verify
 

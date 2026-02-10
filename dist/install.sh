@@ -20,15 +20,16 @@ OPENCLAW_DIR="${HOME}/.openclaw"
 SKILLS_DIR="${OPENCLAW_DIR}/skills/ollama-memory-embeddings"
 
 MODEL="${EMBEDDING_MODEL:-embeddinggemma}"
-IMPORT_LOCAL_GGUF="${IMPORT_LOCAL_GGUF:-auto}"  # auto|yes|no
+IMPORT_LOCAL_GGUF="${IMPORT_LOCAL_GGUF:-no}"  # auto|yes|no (default no for safer behavior)
 IMPORT_MODEL_NAME="${IMPORT_MODEL_NAME:-embeddinggemma-local}"
 NON_INTERACTIVE=0
-SKIP_RESTART=0
+RESTART_GATEWAY="${RESTART_GATEWAY:-no}" # yes|no (default no for safer behavior)
 INSTALL_WATCHDOG=0
 WATCHDOG_INTERVAL=60
 REINDEX_MEMORY="auto" # auto|yes|no
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${OPENCLAW_DIR}/openclaw.json}"
 TMP_ENFORCE_LOG=""
+DRY_RUN=0
 
 usage() {
   cat <<'EOF'
@@ -41,17 +42,18 @@ routing is not affected.
 
 Options:
   --model <id>                embeddinggemma | nomic-embed-text | all-minilm | mxbai-embed-large
-  --import-local-gguf <mode>  auto | yes | no   (default: auto)
-                              In non-interactive mode, auto is treated as "no"
-                              unless explicitly set to "yes".
+  --import-local-gguf <mode>  auto | yes | no   (default: no)
+                              Use yes to explicitly scan/import a local GGUF.
   --import-model-name <name>  model name to create in Ollama (default: embeddinggemma-local)
   --openclaw-config <path>    OpenClaw config path (default: ~/.openclaw/openclaw.json)
   --non-interactive           do not prompt; use supplied/default values
-  --skip-restart              do not restart OpenClaw gateway
+  --restart-gateway <mode>    yes | no (default: no)
+  --skip-restart              deprecated alias for --restart-gateway no
   --install-watchdog          install drift auto-heal watchdog via launchd (macOS)
   --watchdog-interval <sec>   watchdog check interval in seconds (default: 60)
   --reindex-memory <mode>     auto | yes | no (default: auto)
                               auto: reindex only if embedding fingerprint changed
+  --dry-run                   print planned changes, then exit without modifying anything
   --help                      show help
 EOF
 }
@@ -63,10 +65,12 @@ while [ $# -gt 0 ]; do
     --import-model-name) IMPORT_MODEL_NAME="$2"; shift 2 ;;
     --openclaw-config) CONFIG_PATH="$2"; shift 2 ;;
     --non-interactive) NON_INTERACTIVE=1; shift ;;
-    --skip-restart) SKIP_RESTART=1; shift ;;
+    --restart-gateway) RESTART_GATEWAY="$2"; shift 2 ;;
+    --skip-restart) RESTART_GATEWAY="no"; shift ;;
     --install-watchdog) INSTALL_WATCHDOG=1; shift ;;
     --watchdog-interval) WATCHDOG_INTERVAL="$2"; shift 2 ;;
     --reindex-memory) REINDEX_MEMORY="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -99,6 +103,13 @@ validate_reindex_mode() {
   case "$1" in
     auto|yes|no) return 0 ;;
     *) echo "ERROR: invalid reindex mode '$1' (expected auto|yes|no)"; exit 1 ;;
+  esac
+}
+
+validate_restart_mode() {
+  case "$1" in
+    yes|no) return 0 ;;
+    *) echo "ERROR: invalid restart mode '$1' (expected yes|no)"; exit 1 ;;
   esac
 }
 
@@ -250,12 +261,13 @@ require_cmd ollama
 # openclaw CLI is optional (needed for restart only)
 if ! command -v openclaw >/dev/null 2>&1; then
   echo "NOTE: 'openclaw' CLI not found. Gateway restart will be skipped."
-  SKIP_RESTART=1
+  RESTART_GATEWAY="no"
 fi
 
 validate_model "$MODEL"
 validate_import_mode "$IMPORT_LOCAL_GGUF"
 validate_reindex_mode "$REINDEX_MEMORY"
+validate_restart_mode "$RESTART_GATEWAY"
 
 if ! ollama_running; then
   log_err "Ollama is not reachable at http://127.0.0.1:11434"
@@ -270,14 +282,16 @@ validate_model "$MODEL"
 
 LOCAL_GGUF=""
 LOCAL_GGUF_MATCHES_MODEL=0
-if LOCAL_GGUF="$(find_local_embedding_gguf)"; then
-  echo "Detected local embedding GGUF:"
-  echo "  $LOCAL_GGUF"
-  if gguf_matches_selected_model "$LOCAL_GGUF" "$MODEL"; then
-    LOCAL_GGUF_MATCHES_MODEL=1
-  else
-    DETECTED_GGUF_MODEL="$(guess_model_from_gguf "$LOCAL_GGUF")"
-    echo "Local GGUF does not match selected model '${MODEL}' (detected: ${DETECTED_GGUF_MODEL}); skipping GGUF import prompt."
+if [ "$IMPORT_LOCAL_GGUF" != "no" ]; then
+  if LOCAL_GGUF="$(find_local_embedding_gguf)"; then
+    echo "Detected local embedding GGUF:"
+    echo "  $LOCAL_GGUF"
+    if gguf_matches_selected_model "$LOCAL_GGUF" "$MODEL"; then
+      LOCAL_GGUF_MATCHES_MODEL=1
+    else
+      DETECTED_GGUF_MODEL="$(guess_model_from_gguf "$LOCAL_GGUF")"
+      echo "Local GGUF does not match selected model '${MODEL}' (detected: ${DETECTED_GGUF_MODEL}); skipping GGUF import prompt."
+    fi
   fi
 fi
 
@@ -328,12 +342,46 @@ fi
 MODEL_TO_USE_CANON="$(normalize_model "$MODEL_TO_USE")"
 echo "Using model: ${MODEL_TO_USE_CANON}"
 
+# ── Dry run plan ─────────────────────────────────────────────────────────────
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo ""
+  echo "DRY RUN: no files or services will be changed."
+  echo "Would modify:"
+  echo "  - ${SKILLS_DIR}/ (skill files)"
+  echo "  - ${CONFIG_PATH} (OpenClaw config)"
+  echo "Would set memorySearch keys:"
+  echo "  - provider: openai"
+  echo "  - model: ${MODEL_TO_USE_CANON}"
+  echo "  - remote.baseUrl: http://127.0.0.1:11434/v1/"
+  echo "  - remote.apiKey: (set)"
+  echo "Would run:"
+  echo "  - ${SKILLS_DIR}/enforce.sh --model ${MODEL_TO_USE_CANON} --openclaw-config ${CONFIG_PATH} --base-url http://127.0.0.1:11434/v1/"
+  if [ "$RESTART_GATEWAY" = "yes" ]; then
+    echo "  - gateway restart"
+  else
+    echo "  - gateway restart skipped (default)"
+  fi
+  if [ "$INSTALL_WATCHDOG" -eq 1 ]; then
+    echo "  - watchdog install via launchd (${WATCHDOG_INTERVAL}s)"
+  else
+    echo "  - watchdog install skipped (default)"
+  fi
+  if [ "$IMPORT_LOCAL_GGUF" = "no" ]; then
+    echo "  - local GGUF scan/import skipped (default)"
+  else
+    echo "  - local GGUF import mode: ${IMPORT_LOCAL_GGUF}"
+  fi
+  echo "  - verify endpoint"
+  echo "  - memory reindex mode: ${REINDEX_MEMORY}"
+  exit 0
+fi
+
 # ── Install skill files ─────────────────────────────────────────────────────
 
 echo ""
 echo "1. Skill files -> ${SKILLS_DIR}/"
 mkdir -p "$SKILLS_DIR"
-for f in VERSION.txt SKILL.md README.md LICENSE.md install.sh verify.sh; do
+for f in VERSION.txt SKILL.md README.md SECURITY.md LICENSE.md install.sh verify.sh uninstall.sh; do
   if [ -f "${SKILL_DIR}/${f}" ]; then
     # Avoid copying a file onto itself when running from installed skill path.
     if [ "${SKILL_DIR}/${f}" != "${SKILLS_DIR}/${f}" ]; then
@@ -356,7 +404,7 @@ for f in common.sh config.js; do
     fi
   fi
 done
-chmod +x "${SKILLS_DIR}/install.sh" "${SKILLS_DIR}/verify.sh" "${SKILLS_DIR}/enforce.sh" "${SKILLS_DIR}/watchdog.sh" "${SKILLS_DIR}/audit.sh" 2>/dev/null || true
+chmod +x "${SKILLS_DIR}/install.sh" "${SKILLS_DIR}/verify.sh" "${SKILLS_DIR}/enforce.sh" "${SKILLS_DIR}/watchdog.sh" "${SKILLS_DIR}/audit.sh" "${SKILLS_DIR}/uninstall.sh" 2>/dev/null || true
 chmod +x "${SKILLS_DIR}/lib/config.js" 2>/dev/null || true
 
 # ── Config backup ────────────────────────────────────────────────────────────
@@ -422,9 +470,9 @@ fi
 
 # ── Gateway restart ──────────────────────────────────────────────────────────
 
-if [ "$SKIP_RESTART" -eq 1 ]; then
+if [ "$RESTART_GATEWAY" = "no" ]; then
   echo ""
-  echo "4. Skipping gateway restart (--skip-restart)"
+  echo "4. Skipping gateway restart (--restart-gateway no)"
 else
   echo ""
   echo "4. Restarting OpenClaw gateway..."

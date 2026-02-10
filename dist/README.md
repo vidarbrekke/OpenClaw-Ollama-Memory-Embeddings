@@ -34,6 +34,17 @@ This skill is available on [GitHub](https://github.com/vidarbrekke/OpenClaw-Olla
 bash ~/.openclaw/skills/ollama-memory-embeddings/install.sh
 ```
 
+Safer defaults are used unless explicitly overridden:
+- No gateway restart (`--restart-gateway no`)
+- No local GGUF scan/import (`--import-local-gguf no`)
+- No watchdog install (unless `--install-watchdog`)
+
+Preview everything without changing anything:
+
+```bash
+bash ~/.openclaw/skills/ollama-memory-embeddings/install.sh --dry-run
+```
+
 Bulletproof install (enforce + watchdog):
 
 ```bash
@@ -95,6 +106,20 @@ Remove launchd watchdog:
 
 ```bash
 ~/.openclaw/skills/ollama-memory-embeddings/watchdog.sh --uninstall-launchd
+```
+
+## Uninstall / Revert
+
+Best-effort revert using latest config backup:
+
+```bash
+~/.openclaw/skills/ollama-memory-embeddings/uninstall.sh
+```
+
+Optional restart after revert:
+
+```bash
+~/.openclaw/skills/ollama-memory-embeddings/uninstall.sh --restart-gateway yes
 ```
 
 ## Audit (read-only)

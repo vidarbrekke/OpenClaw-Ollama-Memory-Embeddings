@@ -98,6 +98,15 @@ xml_escape() {
   printf '%s' "$s"
 }
 
+reject_newlines() {
+  local name="$1"
+  local value="$2"
+  if [[ "$value" == *$'\n'* ]] || [[ "$value" == *$'\r'* ]]; then
+    log_err "$name must not contain newline characters."
+    exit 1
+  fi
+}
+
 run_cycle() {
   set +e
   "$ENFORCE_SH" \
@@ -143,6 +152,14 @@ install_launchd() {
   mkdir -p "$(dirname "$PLIST_PATH")" "$LOG_DIR"
   local shell_bin
   shell_bin="$(command -v bash)"
+  reject_newlines "MODEL" "${MODEL}"
+  reject_newlines "BASE_URL" "${BASE_URL}"
+  reject_newlines "CONFIG_PATH" "${CONFIG_PATH}"
+  reject_newlines "STDOUT_LOG" "${STDOUT_LOG}"
+  reject_newlines "STDERR_LOG" "${STDERR_LOG}"
+  reject_newlines "PLIST_NAME" "${PLIST_NAME}"
+  reject_newlines "SKILL_DIR" "${SKILL_DIR}"
+  reject_newlines "shell_bin" "${shell_bin}"
   local esc_plist_name esc_shell_bin esc_skill_dir esc_model esc_base_url esc_config_path esc_stdout_log esc_stderr_log
   esc_plist_name="$(xml_escape "${PLIST_NAME}")"
   esc_shell_bin="$(xml_escape "${shell_bin}")"
