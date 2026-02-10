@@ -88,6 +88,16 @@ resolve_model_if_missing() {
   fi
 }
 
+xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"
+  s="${s//</&lt;}"
+  s="${s//>/&gt;}"
+  s="${s//\"/&quot;}"
+  s="${s//\'/&apos;}"
+  printf '%s' "$s"
+}
+
 run_cycle() {
   set +e
   "$ENFORCE_SH" \
@@ -133,6 +143,15 @@ install_launchd() {
   mkdir -p "$(dirname "$PLIST_PATH")" "$LOG_DIR"
   local shell_bin
   shell_bin="$(command -v bash)"
+  local esc_plist_name esc_shell_bin esc_skill_dir esc_model esc_base_url esc_config_path esc_stdout_log esc_stderr_log
+  esc_plist_name="$(xml_escape "${PLIST_NAME}")"
+  esc_shell_bin="$(xml_escape "${shell_bin}")"
+  esc_skill_dir="$(xml_escape "${SKILL_DIR}")"
+  esc_model="$(xml_escape "${MODEL}")"
+  esc_base_url="$(xml_escape "${BASE_URL}")"
+  esc_config_path="$(xml_escape "${CONFIG_PATH}")"
+  esc_stdout_log="$(xml_escape "${STDOUT_LOG}")"
+  esc_stderr_log="$(xml_escape "${STDERR_LOG}")"
   local restart_flag_xml=""
   if [ "$RESTART_ON_HEAL" -eq 1 ]; then
     restart_flag_xml="    <string>--restart-on-heal</string>"
@@ -143,18 +162,18 @@ install_launchd() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${PLIST_NAME}</string>
+  <string>${esc_plist_name}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${shell_bin}</string>
-    <string>${SKILL_DIR}/watchdog.sh</string>
+    <string>${esc_shell_bin}</string>
+    <string>${esc_skill_dir}/watchdog.sh</string>
     <string>--once</string>
     <string>--model</string>
-    <string>${MODEL}</string>
+    <string>${esc_model}</string>
     <string>--base-url</string>
-    <string>${BASE_URL}</string>
+    <string>${esc_base_url}</string>
     <string>--openclaw-config</string>
-    <string>${CONFIG_PATH}</string>
+    <string>${esc_config_path}</string>
 ${restart_flag_xml}
   </array>
   <key>RunAtLoad</key>
@@ -162,9 +181,9 @@ ${restart_flag_xml}
   <key>StartInterval</key>
   <integer>${INTERVAL_SEC}</integer>
   <key>StandardOutPath</key>
-  <string>${STDOUT_LOG}</string>
+  <string>${esc_stdout_log}</string>
   <key>StandardErrorPath</key>
-  <string>${STDERR_LOG}</string>
+  <string>${esc_stderr_log}</string>
 </dict>
 </plist>
 EOF
