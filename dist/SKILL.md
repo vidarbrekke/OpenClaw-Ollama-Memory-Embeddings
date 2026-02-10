@@ -1,6 +1,6 @@
 ---
 slug: ollama-memory-embeddings
-version: "1.0.2"
+version: "1.0.3"
 display_name: Ollama Memory Embeddings
 displayName: Ollama Memory Embeddings
 name: ollama-memory-embeddings
