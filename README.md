@@ -4,6 +4,8 @@ Installable OpenClaw skill to use **Ollama as the embeddings server** for
 memory search (OpenAI-compatible `/v1/embeddings`).
 
 > **Embeddings only** — chat/completions routing is not affected.
+>
+> This skill is available on [GitHub](https://github.com/vidarbrekke/OpenClaw-Ollama-Memory-Embeddings) under the MIT license.
 
 ## Features
 
