@@ -207,6 +207,12 @@ try {
         `apiKey:${apiKeySet}\n`,
     );
     if (ms.provider !== "openai" || !ms.model || !ms?.remote?.baseUrl) {
+      if (ms.provider && ms.provider !== "openai") {
+        process.stderr.write(
+          "OpenClaw expects memorySearch.provider to be 'openai' for OpenAI-compatible endpoints (e.g. Ollama). " +
+            "Other values (e.g. 'remote') cause config validation to fail. Run enforce.sh to fix.\n",
+        );
+      }
       process.exit(1);
     }
     process.exit(0);

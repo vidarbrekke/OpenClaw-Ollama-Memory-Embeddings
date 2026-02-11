@@ -122,6 +122,33 @@ Optional restart after revert:
 ~/.openclaw/skills/ollama-memory-embeddings/uninstall.sh --restart-gateway yes
 ```
 
+## Verify memory/embeddings (troubleshooting)
+
+If an agent reports it can’t confirm memory/embeddings (e.g. “Operation not allowed” when running diagnostics), possible causes include tool permissions, gateway state, or a transient error—not necessarily a problem with the embeddings service. You can verify locally:
+
+1. **Skill verification** (reads config, calls Ollama):
+   ```bash
+   ~/.openclaw/skills/ollama-memory-embeddings/verify.sh
+   ~/.openclaw/skills/ollama-memory-embeddings/verify.sh --verbose   # dump response on failure
+   ```
+2. **Model present in Ollama:**
+   ```bash
+   ollama list
+   ollama show nomic-embed-text   # or embeddinggemma, etc.
+   ```
+3. **Direct endpoint check:**
+   ```bash
+   curl -s -X POST http://127.0.0.1:11434/v1/embeddings \
+     -H "Content-Type: application/json" \
+     -d '{"model":"nomic-embed-text:latest","input":"test"}' | head -c 200
+   ```
+   A valid response includes `"object":"list"` and `"embedding":[...]`.
+
+Common causes of memory search failure:
+- **Model not in Ollama:** config says e.g. `nomic-embed-text:latest` but `ollama list` doesn’t show it → run `ollama pull nomic-embed-text`.
+- **Wrong `provider`:** OpenClaw only accepts `memorySearch.provider: "openai"` for OpenAI-compatible endpoints (e.g. Ollama). Any other value (e.g. `remote`) causes config validation to fail (“Invalid input”) and can prevent the gateway from starting. Run `enforce.sh` to fix.
+- **Ollama down or unreachable:** start Ollama and ensure `baseUrl` (e.g. `http://127.0.0.1:11434/v1/`) is correct.
+
 ## Audit (read-only)
 
 Report commands, config drift, and recommended actions without changing anything:
